@@ -1,0 +1,15 @@
+model_spec,vals
+patch_no,2
+begin_year,1989
+do_dirichlet,0
+eval_l_comps,0
+t_dep_mortality,0
+t_dep_dispersal,0
+t_dep_recruitment,1
+spawn_rec_relationship,0
+run_forecast,0
+warmups,1000
+total_iterations,3000
+max_tree_depth,10
+n_chains,4
+stan_model_file,process_sdm_bsb.stan
