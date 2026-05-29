@@ -1,0 +1,677 @@
+// process_sdm_bsb.stan
+// Author: Jeewantha Bandara
+// Stan code for fitting the DRM model for black sea bass
+
+functions {
+  
+  real T_dep(real sbt, real Topt, real width){
+    return exp(-0.5 * ((sbt - Topt)/width)^2); // gaussian temperature-dependent function
+  }
+  
+  // Probabilistic relationship between size of a fish and it's age
+  // NOTE: This is currently not used in the model
+  matrix age_at_length_key(real loo, real l0, real k, real cv, int n_lbins, int n_ages){
+    
+    vector[n_lbins] mean_age_at_length; //A vector of mean age at length
+    vector[n_lbins] sigma_age_at_length; //A vector of standard devation of ages at length
+    matrix[n_lbins, n_ages] prob_age_at_length; //A vector that will store the probability of each age at a specific length
+    
+    // make vector of mean ages for each length 
+    for(i in 1:n_lbins){
+      mean_age_at_length[i] = log((loo - i) / (loo - l0)) / -k; 
+    }
+    
+    for(i in 1:n_lbins){
+      for(j in 1:n_ages){
+        if(j < n_ages){
+          prob_age_at_length[i,j] = normal_cdf(j+1, mean_age_at_length[i], sigma_age_at_length[i]) - normal_cdf(j, mean_age_at_length[i], sigma_age_at_length[i]);  // analog of pnorm in R
+        }
+        else{
+          prob_age_at_length[i,j] = normal_cdf(j, mean_age_at_length[i], sigma_age_at_length[i]);
+        } // close if/else
+      } // close ages
+    } // close lengths
+    return prob_age_at_length;
+  } // close function
+  
+} // close functions block
+
+data {
+  
+  // survey data 
+  
+  int n_ages; // number of ages
+  
+  int np; // number of patches
+  
+  int ny_train; // years for training
+  
+  int ny_proj; // number of years to forecast 
+  
+  int n_lbins; // number of length bins (here just the range of cm values)
+  
+  matrix[n_ages, n_lbins] l_at_a_key;
+  
+  vector[n_ages] wt_at_age;
+  
+  real abund_p_y[np, ny_train]; // MEAN density of individuals of any age in each haul; used for rescaling the abundance to fit to our data
+  
+  // environmental data 
+  
+  real sbt[np, ny_train]; // Mean annual temperature data for training - Data from GLORYS
+  
+  real winter_sbt[np,ny_train]; // Winter temperature data for training - Data from GLORYS
+  
+  real sbt_proj[np, ny_proj]; // 
+  
+  // fish data
+  
+  real m;  // total mortality 
+  
+  real k; 
+  
+  real loo; // infinite length
+  
+  real t0;
+  
+  real cv; //variance-covariance matrix
+  
+  real f[np, n_ages, ny_train]; 
+  
+  real f_proj[np, n_ages, (ny_proj+1)];
+  
+  real length_50_sel_guess;
+  
+  vector<lower=0>[n_lbins] bin_mids;
+  
+  int sel_100; // age at which selectivity is 100%
+  
+  int age_at_maturity;
+  
+  int<lower = 0, upper = 1> do_dirichlet; // This is pronounced 'deer-shlay'
+  
+  int<lower = 0, upper = 1> T_dep_recruitment; // Temperature dependent recruitment
+  
+  int<lower = 0, upper = 1> T_dep_mortality; // Temperature dependent mortality
+  
+  int<lower = 0, upper = 1> T_dep_dispersal; // Temperature dependent dispersal
+  
+  int<lower = 0, upper = 1> eval_l_comps; // Switch to evaluate length composition
+  
+  int<lower = 0, upper = 1> spawner_recruit_relationship; // Switch to turn on the spawner recruit relationship
+  
+  int<lower = 0, upper = 1> run_forecast; // Switch to run the forecast of the model
+
+  int n_p_l_y[np, n_lbins, ny_train]; // SUM number of individuals in each length bin, patch, and year; used for age composition only, because the magnitude is determined by sampling effort
+  
+  
+}
+
+transformed data{
+  // Incorporates the 
+  vector[n_ages] maturity_at_age; // vector of probabilities of being mature at each age, currently binary (0/1) and taken as known
+  
+  for(a in 1:n_ages){
+    if(a < age_at_maturity){
+      maturity_at_age[a]=0;
+    }else{
+      maturity_at_age[a]=1;
+    }
+  }
+}
+
+// Parameters are calculated or estimated in the model
+parameters{
+  
+  real<lower = 1e-3> sigma_r; // Process error
+  
+  real<lower = 1e-3> sigma_obs; // Observation error
+  
+  real<lower=1e-3> width; // sensitivity to temperature variation
+  
+  real<lower=2, upper=30> Topt; //  temp at which dispersal is maximized
+  
+  real<lower=2, upper=30> Topt_rec; // Temperature at which recruitment is maximized
+  
+  real<lower=1e-3> width_rec; // sensitive to recruitment temperature variation
+  
+  real<lower = -1, upper = 1> alpha; // autocorrelation term
+  
+  real log_mean_recruits; // log mean recruits per patch, changed to one value for all space/time.
+  
+  vector[ny_train] raw; // array of raw recruitment deviates, changed to one value per year
+  
+  real<upper = 0.8> p_length_50_sel; // length at 50% selectivity
+  
+  real<lower=0, upper=1> beta_obs; // controls how fast detection goes up with abundance
+  
+  real<lower=0, upper=0.5> d; // dispersal fraction (0.5 = perfect admixture). Setting this to 0.5 because it's a two spatial unit model as of now
+  
+  real <lower = 0> theta_d; // Used to calculate lgamma
+  
+  real<lower=0.2, upper=1> h; // Used to calculate n_p_a_y_hat when stock recruitment is toggled on
+  
+  real log_r0; // Used to get r0. This will be used to calculate the stock recruitment relationship
+  
+  real <lower=0, upper=1> beta_0; // Intercept for the quadratic function to calculate mortality
+  
+  real <lower=0, upper=1> beta_1; // First parameter for the quadratic function to calculate mortality
+  
+  real <lower=0, upper=1> beta_2; // Second parameter for the quadratic function to calculate mortality
+  
+  real mort_tau; // Process error for natural mortality
+  
+  vector[np] log_init_recruits; // Used to get the initial starting populations for each patch. In log for form
+  
+}
+
+// The transformed parameters are the one calculated from the parameters
+transformed parameters{
+  
+  real T_adjust[np, ny_train]; // tuning parameter for sbt dispersal suitability in each patch*year
+  
+  real T_adjust_rec[np, ny_train]; // tuning parameter for recruitment suitability in each patch*year
+  
+  // real T_adjust_mortality[np, ny_train];
+  
+  real length_50_sel; // Length at which 50% of individuals are selected
+  
+  real sel_delta;
+  
+  real mean_recruits;
+  
+  matrix<lower=0, upper=1> [np, ny_train] theta; // Bernoulli probability of encounter  
+  
+  real n_p_a_y_hat [np, n_ages,ny_train]; // array of numbers at patch, stage, and year 
+  
+  matrix[np, n_lbins] n_p_l_y_hat[ny_train]; // array number of years containing matrices with numbers at patch, length bin, and year 
+  
+  real dens_p_y_hat [np, ny_train]; // for tracking sum density 
+  
+  vector[ny_train-1] rec_dev; // array of realized recruitment deviates, also now only 1/yr (it's a good or bad year everywhere)
+  
+  vector[n_lbins] selectivity_at_bin; // mean selectivity at length bin midpoint
+  
+  real surv[np, n_ages, ny_train];
+  
+  real ssb0; // Starting Spawning stock biomass. 
+  
+  vector[n_ages] unfished; // Starting unfished numbers for each age. 
+  
+  matrix[np, ny_train] ssb; // Spawning stock biomass for each patch through the years
+  
+  vector[n_ages] stupid_vector;
+  
+  real<lower=0> r0;
+  
+  vector[np] init_recruits;
+  
+  real mortality[np, ny_train];
+  
+  real mort[np, ny_train]; 
+  
+  // Initial recruits
+  for(p in 1:np){
+    init_recruits[p] = exp(log_init_recruits[p]);
+  }
+  
+  r0 = exp(log_r0);
+
+  ssb0 = -999;
+  
+  for(a in 1:n_ages){
+    unfished[a] = 999;
+    stupid_vector[a] = 999;
+  }
+  for(p in 1:np){
+    for(y in 1:ny_train){
+      ssb[p,y] = 999;
+    }
+  }
+  
+  if(spawner_recruit_relationship==1){
+    for(a in 1:n_ages){
+      if(a==1){
+        unfished[a] = r0;
+      }
+      else{
+        unfished[a] = unfished[a-1] * exp(-m);
+      }
+      print("unfished at age ",a," is ",unfished[a]);
+      
+    }
+    ssb0 = sum(unfished .* maturity_at_age .* wt_at_age);
+  }
+  
+  
+  sel_delta = 2;
+  
+  length_50_sel = loo * p_length_50_sel;
+  
+  // Setting selectivity using steepness
+  selectivity_at_bin = 1.0 ./ (1 + exp(-log(19) * ((bin_mids - length_50_sel) / sel_delta))); // selectivity ogive at age
+  
+  mean_recruits = exp(log_mean_recruits);
+  
+  // Dispersal temperature optimums
+  // // calculate temperature-dependence correction factor for dispersal in each patch and year depending on sbt
+  for(p in 1:np){
+     for(y in 1:ny_train){
+       T_adjust[p,y] = T_dep(sbt[p,y], Topt, width);  
+     } // close years
+   } // close patches
+   
+   // 
+   // // calculate temperature-dependence correction factor for recruitment in each patch and year depending on sbt
+  for(p in 1:np){
+     for(y in 1:ny_train){
+       T_adjust_rec[p,y] = T_dep(winter_sbt[p,y], Topt_rec, width_rec);  
+     } // close years
+   } // close patches
+  
+  // calculate temperature-dependence correction factor for each patch and year depending on sbt
+  if(T_dep_mortality==1){
+    for(p in 1:np){
+      for(y in 1:ny_train){
+        mortality[p,y] = beta_0 + beta_1 * sbt[p,y] + beta_2 * sbt[p,y]^2 ; // Mortality temp relationship
+        mort[p,y] = mortality[p,y];
+         }
+      } // close years
+    } // close patches
+  
+  
+  // calculate total annual mortality from instantaneous natural + fishing mortality data 
+  // note that z is the proportion that survive, 1-z is the proportion that die 
+  
+  for(p in 1:np){
+    for(a in 1:n_ages){
+      for(y in 1:ny_train){
+        
+        if(T_dep_mortality==1){
+          surv[p,a,y] = exp(-(f[p,a,y] + mort[p,y])); 
+          }
+        if(T_dep_mortality==0){
+          surv[p,a,y] = exp(-(f[p,a,y] + m)) ;
+          }
+
+        }
+      }
+  }
+
+
+// fill in year 1 of n_p_a_y_hat, initialized with mean_recruits 
+for(p in 1:np){
+  for(a in 1:n_ages){
+    if(a==1){
+      if(T_dep_recruitment==1 && spawner_recruit_relationship==0){
+        n_p_a_y_hat[p,a,1] = mean_recruits * T_adjust_rec[p,1] * exp(raw[1] - pow(sigma_r,2) / 2); // initialize age 0 with mean recruitment in every patch
+      }
+      if(T_dep_recruitment==0 && spawner_recruit_relationship==0){
+        n_p_a_y_hat[p,a,1] = mean_recruits * exp(raw[1] - pow(sigma_r,2) / 2); // initialize age 0 with mean recruitment in every patch
+      }
+      if(T_dep_recruitment==0 && spawner_recruit_relationship==1){
+        n_p_a_y_hat[p,a,1] = init_recruits[p] * 0.1; // scale it down a bit -- historical fishing was still occurring
+      }
+      if(T_dep_recruitment==1 && spawner_recruit_relationship==1){
+        n_p_a_y_hat[p,a,1] = init_recruits[p] * 0.1 * T_adjust_rec[p,1];
+      }
+    } // close age==1 case
+    else{
+      n_p_a_y_hat[p,a,1] = n_p_a_y_hat[p,a-1,1] * surv[p,a-1,1]; // initialize population with mean recruitment propogated through age classes with mortality
+    }
+    
+  } // close ages
+} // close patches
+
+
+// calculate recruitment deviates every year (not patch-specific)
+for (y in 2:ny_train){
+  
+  if(spawner_recruit_relationship==0){
+    if (y == 2){ 
+      rec_dev[y-1]  =  raw[y]; // initialize first year of rec_dev with raw (process error) -- now not patch-specific
+      // need to fix this awkward burn in
+    } // close y==2 case  
+    else {
+      
+      rec_dev[y-1] =  alpha * rec_dev[y-2] + raw[y];
+      
+    } // close ifelse
+  }
+  
+  // describe population dynamics
+  for(p in 1:np){
+    
+    // density-independent, temperature-dependent recruitment of age 1
+    
+    if(T_dep_recruitment==1 && spawner_recruit_relationship==0){
+      n_p_a_y_hat[p,1,y] = mean_recruits * exp(rec_dev[y-1] - pow(sigma_r,2)/2) * T_adjust_rec[p,y];
+    }
+    if(T_dep_recruitment==0 && spawner_recruit_relationship==0){
+      n_p_a_y_hat[p,1,y] = mean_recruits * exp(rec_dev[y-1] - pow(sigma_r,2)/2) ;
+    }
+    
+    if(T_dep_recruitment==0 && spawner_recruit_relationship==1){
+      n_p_a_y_hat[p,1,y] = (0.8 * r0 * h * ssb[p, y-1]) / (0.2 * ssb0 * (1-h) + ssb0 * (h - 0.2));
+    }
+    if(T_dep_recruitment==1 && spawner_recruit_relationship==1){
+      n_p_a_y_hat[p,1,y] = ((0.8 * r0 * h * ssb[p, y-1]) / (0.2 * ssb0 * (1-h) + ssb0 * (h - 0.2))) * T_adjust_rec[p,y];
+    }
+    
+    // pop dy for non-reproductive ages 
+    if(age_at_maturity > 1){ // confirm that there are non-reproductive age classes above 1
+      for(a in 2:(age_at_maturity-1)){
+        
+        n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1]; // these just grow and die in the patch
+        
+      } // close ages for 2 to age at maturity
+    } // close if 
+    
+    // pop dy for reproductive adults
+    // mortality and dispersal are happening simultaneously here, between generations
+    // because neither is patch-specific the order doesn't matter.
+      
+      for(a in age_at_maturity:n_ages){
+        
+        if(T_dep_dispersal==1){
+            // edge cases -- edges are reflecting
+          if(p==1){
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-d*(1-T_adjust[p,y-1])) + n_p_a_y_hat[p+1, a-1, y-1] * surv[p+1,a-1,y-1] * d*(1-T_adjust[p,y-1]);
+          } // close patch 1 case 
+          
+          else if(p==np){
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-d*(1-T_adjust[p,y-1])) + n_p_a_y_hat[p-1, a-1, y-1] * surv[p-1,a-1,y-1] * d*(1-T_adjust[p,y-1]);
+          } // close highest patch
+          
+          else{
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-2*d*(1-T_adjust[p,y-1])) + n_p_a_y_hat[p-1, a-1, y-1] * surv[p-1,a-1,y-1] * d*(1-T_adjust[p,y-1]) + n_p_a_y_hat[p+1, a-1, y-1] * surv[p+1,a-1,y-1] * d*(1-T_adjust[p,y-1]);
+            
+          } // close if/else for all other patches
+        }
+        else{
+          // edge cases -- edges are reflecting
+          if(p==1){
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-d) + n_p_a_y_hat[p+1, a-1, y-1] * surv[p+1,a-1,y-1] * d;
+          } // close patch 1 case 
+          
+          else if(p==np){
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-d) + n_p_a_y_hat[p-1, a-1, y-1] * surv[p-1,a-1,y-1] * d;
+          } // close highest patch
+          
+          else{
+            n_p_a_y_hat[p,a,y] = n_p_a_y_hat[p, a-1, y-1] * surv[p,a-1,y-1] * (1-2*d) + n_p_a_y_hat[p-1, a-1, y-1] * surv[p-1,a-1,y-1] * d + n_p_a_y_hat[p+1, a-1, y-1] * surv[p+1,a-1,y-1] * d;
+            
+          } // close if/else for all other patches
+        }
+      }// close ages
+    } // close patches 
+    
+    
+  } // close year 2+ loop
+  
+  for(p in 1:np){
+    for(y in 1:ny_train){
+      
+      n_p_l_y_hat[y,p,1:n_lbins] = ((l_at_a_key' * to_vector(n_p_a_y_hat[p,1:n_ages,y])) .* selectivity_at_bin)'; 
+      // convert numbers at age to numbers at length. The assignment looks confusing here because this is an array 
+      // of length y containing a bunch of matrices of dim p and n_lbins
+      // see https://mc-stan.org/docs/2_18/reference-manual/array-data-types-section.html
+      
+      // n_p_l_y_hat[y,p,1:n_lbins]  =  (to_vector(n_p_l_y_hat[y,p,1:n_lbins])  .* selectivity_at_bin)';
+
+      dens_p_y_hat[p,y] = sum((to_vector(n_p_l_y_hat[y,p,1:n_lbins])));
+
+      theta[p,y] = ((1/(1+exp(-beta_obs*dens_p_y_hat[p,y]))) - 0.5)*2;
+      // subtracting 0.5 and multiplying by 2 is a hacky way to get theta[0,1]
+
+      }
+    }
+// We only need to calculate the following if the spawning_stock_recruit_relationship is toggled 'ON'.
+// Otherwise we don't need to estimate the SSB
+  if(spawner_recruit_relationship==1){
+    for(p in 1:np){
+      for(y in 1:ny_train){
+        for(a in 1:n_ages){
+          stupid_vector[a] = n_p_a_y_hat[p,a,y] * maturity_at_age[a] * wt_at_age[a]; // This is to calculate the Spawning stock biomass. You need to calculate the total weight of mature individuals in each age class and sum it
+        }
+        ssb[p,y] = sum(stupid_vector) ;
+      }
+    }
+  }
+  
+  
+} // close transformed parameters block
+
+model {
+  
+  real n;
+  
+  vector[n_lbins] prob_hat;
+  
+  vector[n_lbins] prob;
+  
+  real dml_tmp;
+  
+  real test;
+  
+  beta_obs ~ normal(0.5,0.01); 
+  
+  if(spawner_recruit_relationship==0){
+    log_mean_recruits ~ normal(7,3);
+    raw ~ normal(0, sigma_r);
+    sigma_r ~ normal(.7,.1);
+  }
+  
+  if(spawner_recruit_relationship==1){
+    h ~ normal(0.6, 0.025);
+    log_r0 ~ normal(5,0.5);
+    for(p in 1:np){
+      log_init_recruits[p] ~ normal(5,0.5);
+    }
+  }
+  
+  width ~ normal(4, 1); 
+  
+  Topt_rec ~ normal(18, 4);
+  
+  width_rec ~ normal(4, 1);
+  
+  Topt ~ normal(10, 2);
+  
+  alpha ~ normal(0.5,.1); // autocorrelation prior
+  
+  d ~ normal(0.5, 0.1); // dispersal rate as a proportion of total population size within the patch
+  
+  sigma_obs ~ normal(0.5,0.15);
+  
+  p_length_50_sel ~ normal(length_50_sel_guess/loo, .2);
+  
+  theta_d ~ normal(0.5,0.1);
+  
+  beta_0 ~ normal(0.03, 0.1);
+  beta_1 ~ normal(0.01,0.01);
+  beta_2 ~ normal(0.02, 0.01);
+  mort_tau ~ normal(0,1);
+
+
+  for(y in 2:ny_train) {
+    
+    for(p in 1:np){
+      
+      if((abund_p_y[p,y]) > 0) {
+      // This is how the model fits to the length data.
+      // Usually we'd use a multinomial distribution to fit the data
+      // Instead we are using dirichlet distributinog to fit the length composition data
+      if(eval_l_comps==1){
+        if (sum(n_p_l_y[p,1:n_lbins,y]) > 0) {
+          
+          if (do_dirichlet == 1){
+            
+            prob_hat = (to_vector(n_p_l_y_hat[y,p,1:n_lbins])  / sum(to_vector(n_p_l_y_hat[y,p,1:n_lbins])));
+            
+            prob = (to_vector(n_p_l_y[p,1:n_lbins,y])  / sum(to_vector(n_p_l_y[p,1:n_lbins,y])));
+            
+            n = sum(n_p_l_y[p,1:n_lbins,y]);
+            
+            dml_tmp = lgamma(n + 1) -  sum(lgamma(n * prob + 1)) + lgamma(theta_d * n) - lgamma(n + theta_d * n) + sum(lgamma(n * prob + theta_d * n * prob_hat) - lgamma(theta_d * n * prob_hat)); // see https://github.com/merrillrudd/LIME/blob/9dcfc7f7d5f56f280767c6900972de94dd1fea3b/src/LIME.cpp//L559 for log transformation of dirichlet-multinomial in Thorston et al. 2017
+            
+            // dml_tmp = lgamma(n + 1) - sum(lgamma(n * prob_hat + 1)) + (lgamma(theta_d * n) - lgamma(n + theta_d * n)) * prod(((lgamma(n * prob_hat + theta_d * n * prob))./(lgamma(theta_d * n * prob))));
+            
+            // test = prod(1:10);
+            
+            // print(dml_tmp);
+            
+            target += dml_tmp;
+            
+          } else {
+            
+            (n_p_l_y[p,1:n_lbins,y]) ~ multinomial((to_vector(n_p_l_y_hat[y,p,1:n_lbins])  / sum(to_vector(n_p_l_y_hat[y,p,1:n_lbins]))));
+            
+          } // close dirichlet statement
+          
+        } // close if any positive length comps
+        
+      } // close eval_length_comps
+
+    // How does observation error factor into the final abundance observations
+      log(abund_p_y[p,y]) ~ normal(log(dens_p_y_hat[p,y] + 1e-6), sigma_obs); 
+    
+      1 ~ bernoulli(theta[p,y]);
+    
+    
+    } else { // only evaluate length comps if there are length comps to evaluate
+      
+      0 ~ bernoulli(theta[p,y]);
+      
+    } // close else 
+      } // close patch loop
+    
+    } // close year loop
+}
+
+// What are generated quantities?
+  // https://mc-stan.org/docs/2_29/reference-manual/program-block-generated-quantities.html
+// Nothing in this code block affects the sampled parameters. 
+// Everything is calculated after the sample has been generated. To be used for 
+// projections or generate simulated data for model testing
+
+// // This last block is for forecasting + calculating log likelihoods
+generated quantities {
+  real proj_n_p_a_y_hat[np, n_ages, ny_proj+1];
+  real T_adjust_proj[np, ny_proj];
+  vector[ny_proj] rec_dev_proj;
+  vector[ny_proj] raw_proj;
+  real surv_proj[n_ages, (ny_proj+1)];
+  matrix[np, n_lbins] proj_n_p_l_y_hat[ny_proj];
+  real proj_dens_p_y_hat [np, ny_proj];
+  // Line above should be: `array[np, ny_proj] real proj_dens_p_y_hat [np, ny_proj];`
+  //                    or matrix[np, ny_proj] proj_dens_p_y_hat;`
+  matrix[np, ny_train] log_lik; // Matrix for storing log likelihoods
+  // Loop for calculating log likelihoods to calculate WAIC for model comparison
+  // We have to include an option for calculating log likelihoods for when abund[p,y]
+  // is zero. We do this by including `log1m` which is log(1-x)
+  // `lognormal_lpdf` - The log of the lognormal density of y given location mu and scale sigma
+  for (p in 1:np) {
+    for (y in 1:ny_train) {
+      if (abund_p_y[p, y] == 0.0) {
+        log_lik[p, y] = log_sum_exp(log1m(theta[p, y]), log(theta[p, y]) +
+                      normal_lpdf(1 |
+                                     log((dens_p_y_hat[p, y] + 1e-6) / (theta[p,y] + 1e-6)) -
+                                     pow(sigma_obs, 2)/2,
+                                     sigma_obs));
+      } else {
+        log_lik[p, y] +=
+          log(theta[p, y]) +
+          normal_lpdf(log(abund_p_y[p, y]) |
+                         log((dens_p_y_hat[p, y] + 1e-6) / (theta[p,y] + 1e-6)) -
+                         pow(sigma_obs,2)/2,
+                         sigma_obs);
+          }
+    }
+  }
+  if(run_forecast==1){
+    for(p in 1:np){
+      for(y in 1:ny_proj){
+        T_adjust_proj[p,y] = T_dep(sbt_proj[p,y], Topt, width);
+      } // close years
+    } // close patches
+    
+    for(p in 1:np){
+      for(a in 1:n_ages){
+        for(y in 1:(ny_proj+1)){
+          
+          if(T_dep_mortality==0){
+            surv_proj[a,y] = exp(-(f_proj[p,a,y] + m));
+          }
+          if(T_dep_mortality==1){
+            surv_proj[a,y] = exp(-(f_proj[p,a,y] + m))* T_adjust_proj[p,y];
+            
+          }
+        }
+      }
+    }
+    
+    // initialize with final year of our model
+    proj_n_p_a_y_hat[,,1] = n_p_a_y_hat[,,ny_train];
+    rec_dev_proj[1] = rec_dev[ny_train-1];
+    raw_proj[1] = raw[ny_train];
+    
+    // project pop dy
+    for(y in 2:ny_proj){
+      raw_proj[y] = normal_rng(0, sigma_r);
+      //  print("raw_proj in year ",y," is ",raw_proj[y]);
+      rec_dev_proj[y] = alpha * rec_dev_proj[y-1] + raw_proj[y];
+      //  print("rec_dev_proj in year ",y," is ",rec_dev_proj[y]);
+      
+    }
+    
+    for(y in 2:(ny_proj+1)){
+      for(p in 1:np){
+        
+        if(T_dep_recruitment==1){
+          proj_n_p_a_y_hat[p,1,y] = mean_recruits * exp(rec_dev_proj[y-1] - pow(sigma_r,2)/2) * T_adjust_proj[p,y-1];
+        }
+        if(T_dep_recruitment==0){
+          proj_n_p_a_y_hat[p,1,y] = mean_recruits * exp(rec_dev_proj[y-1] - pow(sigma_r,2)/2);
+        }
+        
+        if(age_at_maturity > 1){
+          for(a in 2:(age_at_maturity-1)){
+            proj_n_p_a_y_hat[p,a,y] = proj_n_p_a_y_hat[p, a-1, y-1] * surv_proj[a-1,y-1];
+          } // close ages for 2 to age at maturity
+        } // close if
+        
+        for(a in age_at_maturity:n_ages){
+          if(p==1){
+            proj_n_p_a_y_hat[p,a,y] = proj_n_p_a_y_hat[p, a-1, y-1] * surv_proj[a-1,y-1] * (1-d) + proj_n_p_a_y_hat[p+1, a-1, y-1] * surv_proj[a-1,y-1] * d;
+          } // close patch 1 case
+          
+          else if(p==np){
+            proj_n_p_a_y_hat[p,a,y] = proj_n_p_a_y_hat[p, a-1, y-1] * surv_proj[a-1,y-1] * (1-d) + proj_n_p_a_y_hat[p-1, a-1, y-1] * surv_proj[a-1,y-1] * d;
+          } // close highest patch
+          
+          else{
+            proj_n_p_a_y_hat[p,a,y] = proj_n_p_a_y_hat[p, a-1, y-1] * surv_proj[a-1,y-1] * (1-2*d) + proj_n_p_a_y_hat[p-1, a-1, y-1] * surv_proj[a-1,y-1] * d + proj_n_p_a_y_hat[p+1, a-1, y-1] * surv_proj[a-1,y-1] * d;
+            
+          } // close if/else for all other patches
+          
+        }// close ages
+      } // close patches
+      
+      
+    } // close year 2+ loop
+    
+    for(p in 1:np){
+      for(y in 1:(ny_proj)){
+        
+        proj_n_p_l_y_hat[y,p,1:n_lbins] = ((l_at_a_key' * to_vector(proj_n_p_a_y_hat[p,1:n_ages,y])) .* selectivity_at_bin)'; // convert numbers at age to numbers at length. The assignment looks confusing here because this is an array of length y containing a bunch of matrices of dim p and n_lbins
+                                            proj_dens_p_y_hat[p,y] = sum((to_vector(proj_n_p_l_y_hat[y,p,1:n_lbins])));
+                                            
+      }
+    }
+  }
+  
+}
+
+
+
