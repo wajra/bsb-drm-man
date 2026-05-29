@@ -12,5 +12,5 @@ Supplementary figures are in the `supplementary-figures/` folder
 
 ## List of supplementary figures
 
-1. supp_fig_01_trace_plots.png - Trace plot from best fitting model showing convergence of all chains
+1. `supp_fig_01_trace_plots.png` - Trace plot from best fitting model showing convergence of all chains
 
