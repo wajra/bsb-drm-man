@@ -2,7 +2,7 @@
 
 This repository contains all the code, data, models, and figures for Bandara, Widenmann, and Pinsky (2026).
 
-![alt text](https://github.com/wajra/BSB-DRM/blob/main/drm_schema_banner.png) This should be changed to something simpler
+![alt text](https://github.com/wajra/bsb-drm-man/blob/main/drm_schema_banner.png)
 **Figure 1 - Structure of the Dynamic Range Model for black sea bass in the Northeast US**
 
 Dynamic range models (DRMs) are a class of process-based or mechanistic models 
