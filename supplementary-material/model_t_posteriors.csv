@@ -1,0 +1,8 @@
+model_name,variable,mean,median,q5,q95
+Temperature dependent dipsersal model,Topt,10.36181496,10.3575558,6.961100345,13.77609809
+Temperature dependent dipsersal model,width,3.814991428,3.83027784,2.071234781,5.492644661
+Temperature dependent recruitment model,Topt_rec,10.3207992,10.23684913,9.841697719,11.06046135
+Temperature dependent recruitment model,width_rec,0.544048878,0.534950944,0.451384741,0.662872422
+Temperature dependent mortality model,beta_0,0.135716404,0.128593339,0.018649989,0.278826538
+Temperature dependent mortality model,beta_1,0.017303248,0.016736519,0.003519178,0.032838219
+Temperature dependent mortality model,beta_2,0.015107843,0.014368287,0.009337692,0.021068421
