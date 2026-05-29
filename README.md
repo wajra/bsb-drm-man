@@ -84,7 +84,7 @@ Macbook M2 Pro running MacOS Sequoia 15.7.5 with R version 4.4.1 ("Race for Your
 | RColorBrewer      	| 1.1.3   	|
 | rnaturalearth     	| 1.0.1   	|
 | rnaturalearthdata 	| 1.0.0   	|
-| rstan             	| 2.32.7  	|
+| _rstan_             | 2.32.7  	|
 | rstanarm          	| 2.32.1  	|
 | scales            	| 1.4.0   	|
 | sf                	| 1.0.19  	|
@@ -97,12 +97,13 @@ Macbook M2 Pro running MacOS Sequoia 15.7.5 with R version 4.4.1 ("Race for Your
 **Some of these required libraries have requirements of their own**. I will list 
 directions for installing them below.
 
-### Installing RStan
+### Installing RStan (and rstanarm)
 
 I tried to get RStan working with R Version 3.6.1. However, I kept running into issues 
 with the C++ compiler not being incompatible and even the simplest Stan code 
 couldn't run without errors. What I would suggest is installing the latest version 
-of R available (R version 4.0.0+). I successfully installed Stan on R version 4.1.2 ("Bird Hippie").  
+of R available (R version 4.0.0+). I successfully installed Stan on R version 4.1.2 ("Bird Hippie") 
+all following R versions.  
 I will list the steps below.
 
 #### Step 1: Updating R (If you have an old version of R)
