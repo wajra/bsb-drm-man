@@ -1,8 +1,10 @@
-# saved_models
+# saved-models
 
-Here we have corresponding outputs to the four candidate models. Each model run produces a 
-`.rds` object (which is the model file) and a `.csv` file containing meta information about the model run 
-such as model settings and configurations. The names of the four models are provided below.
+Here we have corresponding outputs to the four candidate models. These model outputs are
+from running `R/pub_script_02_analyze_black_sea_bass.R`.
+Each model run produces a `.rds` object (which is the model file) and a `.csv` 
+file containing meta information about the model run such as model settings and 
+configurations. The names of the four models are provided below.
 
 | Model name                              	| File name/s                                                                                   	|
 |-----------------------------------------	|-----------------------------------------------------------------------------------------------	|
