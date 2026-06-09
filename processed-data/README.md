@@ -1,6 +1,8 @@
 # processed-data
 
-All data resulting from processing the raw data in the `data/` folder.
+All data resulting from processing the raw data in the `data/` folder by 
+`R/pub_script_01_prep_all_data.R` script.  
+
 1. `all_temperatures_glorys.csv` - Seasonal and annual temperatures in the NEUS derived using the GLORYS package.
 2. `black_sea_bass_catch_at_length_spring_training.csv` - Catch at length data formatted from NEUS survey
 used to fit the model
